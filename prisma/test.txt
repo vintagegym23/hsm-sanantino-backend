@@ -1,0 +1,34 @@
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+import dotenv from 'dotenv';
+import { defineConfig } from 'prisma/config';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
+// Load .env
+dotenv.config({ path: join(__dirname, '../.env') });
+
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+  throw new Error('DATABASE_URL must be set in backend/.env');
+}
+
+// @ts-ignore
+export default defineConfig({
+  schema: join(__dirname, 'schema.prisma'),
+
+  // ✅ Top-level datasource for CLI to see
+  datasource: {
+    url: DATABASE_URL,
+    adapter: 'postgresql',
+  },
+
+  // Optional migrate-specific config
+  migrate: {
+    datasource: {
+      url: DATABASE_URL,
+      adapter: 'postgresql',
+    },
+  },
+} as any);
