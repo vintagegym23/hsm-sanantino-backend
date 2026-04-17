@@ -35,6 +35,34 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+const parseSubCategories = (value: unknown): string[] => {
+  if (!value) return [];
+
+  let parsed = value;
+
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return [];
+    }
+  }
+
+  if (!Array.isArray(parsed)) return [];
+
+  return parsed
+    .filter((subCategory): subCategory is string => typeof subCategory === 'string')
+    .map((subCategory) => subCategory.trim())
+    .filter(Boolean);
+};
+
+const ensureCategorySubCategoriesColumn = async () => {
+  await query(`
+    ALTER TABLE "Category"
+    ADD COLUMN IF NOT EXISTS "subCategories" JSONB NOT NULL DEFAULT '[]'::jsonb
+  `);
+};
+
 // ── Core Middlewares ─────────────────────────────
 app.use(cors());
 app.use(express.json());
@@ -80,11 +108,11 @@ app.post('/api/auth/login', async (req, res) => {
 app.get('/api/categories', async (_req, res) => {
   const { rows } = await query(`
     SELECT
-      c.id, c.name, c."imageUrl", c."createdAt",
+      c.id, c.name, c."imageUrl", c."subCategories", c."createdAt",
       json_build_object('items', COUNT(i.id)::int) AS "_count"
     FROM "Category" c
     LEFT JOIN "Item" i ON i."categoryId" = c.id
-    GROUP BY c.id, c.name, c."imageUrl", c."createdAt"
+    GROUP BY c.id, c.name, c."imageUrl", c."subCategories", c."createdAt"
     ORDER BY c."createdAt" ASC
   `);
 
@@ -93,6 +121,7 @@ app.get('/api/categories', async (_req, res) => {
 
 app.post('/api/categories', authenticateToken, upload.single('image'), async (req, res) => {
   const { name } = req.body;
+  const subCategories = parseSubCategories(req.body.subCategories);
 
   const imageUrl = req.file
     ? `/uploads/${req.file.filename}`
@@ -100,9 +129,9 @@ app.post('/api/categories', authenticateToken, upload.single('image'), async (re
 
   try {
     const { rows } = await query(
-      `INSERT INTO "Category" (id, name, "imageUrl", "createdAt")
-       VALUES ($1, $2, $3, NOW()) RETURNING *`,
-      [randomUUID(), name, imageUrl]
+      `INSERT INTO "Category" (id, name, "imageUrl", "subCategories", "createdAt")
+       VALUES ($1, $2, $3, $4::jsonb, NOW()) RETURNING *`,
+      [randomUUID(), name, imageUrl, JSON.stringify(subCategories)]
     );
 
     res.json(rows[0]);
@@ -117,20 +146,21 @@ app.post('/api/categories', authenticateToken, upload.single('image'), async (re
 app.put('/api/categories/:id', authenticateToken, upload.single('image'), async (req, res) => {
   const { id } = req.params;
   const { name } = req.body;
+  const subCategories = parseSubCategories(req.body.subCategories);
 
   const newImage = req.file
     ? `/uploads/${req.file.filename}`
-    : req.body.imageUrl ?? null;
+    : (req.body.imageUrl || null);
 
   const { rows } =
     newImage !== null
       ? await query(
-          `UPDATE "Category" SET name = $1, "imageUrl" = $2 WHERE id = $3 RETURNING *`,
-          [name, newImage, id]
+          `UPDATE "Category" SET name = $1, "imageUrl" = $2, "subCategories" = $3::jsonb WHERE id = $4 RETURNING *`,
+          [name, newImage, JSON.stringify(subCategories), id]
         )
       : await query(
-          `UPDATE "Category" SET name = $1 WHERE id = $2 RETURNING *`,
-          [name, id]
+          `UPDATE "Category" SET name = $1, "subCategories" = $2::jsonb WHERE id = $3 RETURNING *`,
+          [name, JSON.stringify(subCategories), id]
         );
 
   if (!rows[0]) return res.status(404).json({ message: 'Category not found' });
@@ -174,12 +204,12 @@ app.get('/api/items', async (req, res) => {
 });
 
 app.post('/api/items', authenticateToken, async (req, res) => {
-  const { name, description, price, categoryId } = req.body;
+  const { name, description, price, categoryId, subCategory } = req.body;
 
   const { rows } = await query(
-    `INSERT INTO "Item" (id, name, description, price, "categoryId", "createdAt")
-     VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *`,
-    [randomUUID(), name, description, parseFloat(price), categoryId]
+    `INSERT INTO "Item" (id, name, description, price, "categoryId", "subCategory", "createdAt")
+     VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *`,
+    [randomUUID(), name, description, parseFloat(price), categoryId, subCategory || null]
   );
 
   res.json(rows[0]);
@@ -187,16 +217,18 @@ app.post('/api/items', authenticateToken, async (req, res) => {
 
 app.put('/api/items/:id', authenticateToken, async (req, res) => {
   const { id } = req.params;
-  const { name, description, price, categoryId } = req.body;
+  const { name, description, price, categoryId, subCategory } = req.body;
 
   const { rows } = await query(
     `UPDATE "Item"
-     SET name = $1, description = $2, price = $3, "categoryId" = $4
-     WHERE id = $5 RETURNING *`,
-    [name, description, parseFloat(price), categoryId, id]
+     SET name = $1, description = $2, price = $3, "categoryId" = $4, "subCategory" = $5
+     WHERE id = $6 RETURNING *`,
+    [name, description, parseFloat(price), categoryId, subCategory || null, id]
   );
 
-  if (!rows[0]) return res.status(404).json({ message: 'Item not found' });
+  if (rows.length === 0) {
+    return res.status(404).json({ message: 'Item not found' });
+  }
 
   res.json(rows[0]);
 });
@@ -285,6 +317,13 @@ app.use((err: any, _req: any, res: any, _next: any) => {
 });
 
 // ── START SERVER ─────────────────────────────────
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server running on http://localhost:${PORT}`);
-});
+ensureCategorySubCategoriesColumn()
+  .then(() => {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Server running on http://localhost:${PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error('Failed to prepare database schema:', err);
+    process.exit(1);
+  });
