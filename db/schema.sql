@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS "Category" (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL UNIQUE,
   "imageUrl"  TEXT,
+  "subCategories" JSONB NOT NULL DEFAULT '[]'::jsonb,
   "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
@@ -20,6 +21,7 @@ CREATE TABLE IF NOT EXISTS "Item" (
   description  TEXT NOT NULL,
   price        DOUBLE PRECISION NOT NULL,
   "categoryId" TEXT NOT NULL REFERENCES "Category"(id),
+  "subCategory" TEXT,
   "createdAt"  TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

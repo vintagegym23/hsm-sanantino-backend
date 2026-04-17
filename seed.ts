@@ -3,7 +3,7 @@ import { dirname, join } from 'path';
 import { randomUUID } from 'crypto';
 import dotenv from 'dotenv';
 import bcrypt from 'bcryptjs';
-import { query, pool } from '../db.js';
+import { query, pool } from './db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
