@@ -2,15 +2,32 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "node",
+    "moduleResolution": "Node",
+    "outDir": "dist",
+    "rootDir": ".",
+
     "lib": ["ES2022"],
-    "skipLibCheck": true,
-    "noEmit": true,
-    "strict": false,
+
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "resolveJsonModule": true
+    "resolveJsonModule": true,
+
+    "skipLibCheck": true,
+    "strict": false,
+
+    "types": ["node"]
   },
-  "include": ["./**/*.ts"],
-  "exclude": ["node_modules", "dist"]
+
+  "include": [
+    "server.ts",
+    "db.ts",
+    "routes/**/*.ts",
+    "controllers/**/*.ts"
+  ],
+
+  "exclude": [
+    "node_modules",
+    "dist",
+    "data/seed.ts"
+  ]
 }
