@@ -8,7 +8,9 @@ const __dirname = dirname(__filename);
 const ROOT_DIR = join(__dirname, '..');
 const FRONTEND_DIR = join(ROOT_DIR, 'frontend');
 
-dotenv.config({ path: join(__dirname, '.env') });
+if (process.env.NODE_ENV !== "production") {
+  dotenv.config({ path: join(__dirname, '.env') });
+}
 
 import express from 'express';
 import cors from 'cors';
@@ -467,8 +469,8 @@ async function startServer() {
     res.json({ status: 'ok', message: 'Spicy Matka API is running' });
   });
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
   });
 }
 
