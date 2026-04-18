@@ -12,7 +12,7 @@ dotenv.config({ path: join(__dirname, '.env') });
 
 import express from 'express';
 import cors from 'cors';
-import { createServer as createViteServer } from 'vite';
+
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
@@ -462,22 +462,10 @@ async function startServer() {
     res.status(500).json({ message: 'Internal server error' });
   });
 
-  // ── Frontend (Vite dev / static dist) ──────────────────────────────────────
-  if (process.env.NODE_ENV !== 'production') {
-    const vite = await createViteServer({
-      configFile: join(FRONTEND_DIR, 'vite.config.ts'),
-      root: FRONTEND_DIR,
-      server: { middlewareMode: true, hmr: { clientPort: PORT } },
-      appType: 'spa',
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = join(FRONTEND_DIR, 'dist');
-    app.use(express.static(distPath));
-    app.get('*', (_req, res) => {
-      res.sendFile(join(distPath, 'index.html'));
-    });
-  }
+  // ── Health Check Route ──────────────────────────────────────────────────────
+  app.get('/', (_req, res) => {
+    res.json({ status: 'ok', message: 'Spicy Matka API is running' });
+  });
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
