@@ -1,5 +1,6 @@
 -- Spicy Matka — PostgreSQL schema
--- Run once to set up the database: psql -d hsm-sanantonio -f db/schema.sql
+-- Run once on a fresh database: psql -d hsm-sanantonio -f db/schema.sql
+-- For existing databases use db/migrate.sql instead
 
 CREATE TABLE IF NOT EXISTS "Admin" (
   id       TEXT PRIMARY KEY,
@@ -8,23 +9,39 @@ CREATE TABLE IF NOT EXISTS "Admin" (
 );
 
 CREATE TABLE IF NOT EXISTS "Category" (
-  id          TEXT PRIMARY KEY,
-  name        TEXT NOT NULL UNIQUE,
-  "imageUrl"  TEXT,
-  "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
+  id              TEXT PRIMARY KEY,
+  name            TEXT NOT NULL UNIQUE,
+  "imageUrl"      TEXT,
+  "subCategories" JSONB NOT NULL DEFAULT '[]'::jsonb,
+  "createdAt"     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS "Item" (
-  id           TEXT PRIMARY KEY,
-  name         TEXT NOT NULL,
-  description  TEXT NOT NULL,
-  price        DOUBLE PRECISION NOT NULL,
-  "categoryId" TEXT NOT NULL REFERENCES "Category"(id),
-  "createdAt"  TIMESTAMP NOT NULL DEFAULT NOW()
+  id             TEXT PRIMARY KEY,
+  name           TEXT NOT NULL,
+  description    TEXT NOT NULL DEFAULT '',
+  price          DOUBLE PRECISION NOT NULL,
+  "categoryId"   TEXT NOT NULL REFERENCES "Category"(id),
+  "subCategory"  TEXT,
+  "createdAt"    TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS "Media" (
-  id   TEXT PRIMARY KEY,
-  type TEXT NOT NULL,
-  url  TEXT NOT NULL
+  id         TEXT PRIMARY KEY,
+  type       TEXT NOT NULL,
+  url        TEXT NOT NULL,
+  "isActive" BOOLEAN NOT NULL DEFAULT false
+);
+
+CREATE TABLE IF NOT EXISTS "Ticker" (
+  id          TEXT PRIMARY KEY,
+  text        TEXT NOT NULL,
+  "sortOrder" INT NOT NULL DEFAULT 0,
+  "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS "Special" (
+  id          TEXT PRIMARY KEY,
+  "imageUrl"  TEXT NOT NULL,
+  "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );

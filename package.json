@@ -6,10 +6,12 @@
     "dev": "tsx server.ts",
     "start": "NODE_ENV=production tsx server.ts",
     "db:schema": "psql $DATABASE_URL -f db/schema.sql",
-    "db:seed": "tsx prisma/seed.ts"
+    "db:migrate": "psql $DATABASE_URL -f db/migrate.sql",
+    "db:seed": "tsx data/seed.ts"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
+    "cloudinary": "^2.9.0",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",

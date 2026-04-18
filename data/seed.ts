@@ -231,8 +231,8 @@ async function main() {
 
   for (const item of items) {
     await query(
-      `INSERT INTO "Item" (id, name, price, "categoryId", "createdAt")
-       VALUES ($1, $2, $3, $4, NOW())
+      `INSERT INTO "Item" (id, name, description, price, "categoryId", "createdAt")
+       VALUES ($1, $2, '', $3, $4, NOW())
        ON CONFLICT DO NOTHING`,
       [randomUUID(), item[0], item[1], categoryIds[item[2] as string]],
     );

@@ -18,22 +18,55 @@ import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import fs from 'fs';
 import { query } from './db.js';
+import { v2 as cloudinary } from 'cloudinary';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
 const UPLOADS_DIR = join(__dirname, 'uploads');
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true });
-    cb(null, UPLOADS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const ext = file.originalname.slice(file.originalname.lastIndexOf('.'));
-    cb(null, Date.now() + ext);
-  },
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
+const uploadToCloudinary = (buffer: Buffer, resourceType: 'image' | 'video' = 'image'): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const uploadStream = cloudinary.uploader.upload_stream(
+      { resource_type: resourceType, folder: 'spicy-matka' },
+      (error, result) => {
+        if (error) return reject(error);
+        resolve(result!.secure_url);
+      }
+    );
+    uploadStream.end(buffer);
+  });
+};
+
+const extractPublicId = (url: string) => {
+  const uploadIndex = url.indexOf('/upload/');
+  if (uploadIndex === -1) return null;
+  const pathPart = url.substring(uploadIndex + 8); 
+  const parts = pathPart.split('/');
+  if (parts[0].startsWith('v') && !isNaN(parseInt(parts[0].substring(1)))) {
+    parts.shift();
+  }
+  const fullPath = parts.join('/');
+  const lastDot = fullPath.lastIndexOf('.');
+  return lastDot !== -1 ? fullPath.substring(0, lastDot) : fullPath;
+};
+
+const deleteFile = async (url: string | null | undefined, resourceType: 'image' | 'video' = 'image') => {
+  if (!url) return;
+  if (url.startsWith('/uploads/')) {
+    const filePath = join(__dirname, url);
+    if (fs.existsSync(filePath)) {
+      try { fs.unlinkSync(filePath); } catch (err) { console.error('Local delete error:', err); }
+    }
+  } else if (url.includes('cloudinary.com')) {
+    const publicId = extractPublicId(url);
+    if (publicId) {
+      try { await cloudinary.uploader.destroy(publicId, { resource_type: resourceType }); } 
+      catch (err) { console.error('Cloudinary delete error:', err); }
+    }
+  }
+};
 async function startServer() {
   const app = express();
   const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -70,46 +103,89 @@ async function startServer() {
   app.get('/api/categories', async (req, res) => {
     const { rows } = await query(`
       SELECT
-        c.id, c.name, c."imageUrl", c."createdAt",
+        c.id, c.name, c."imageUrl", c."subCategories", c."createdAt",
         json_build_object('items', COUNT(i.id)::int) AS "_count"
       FROM "Category" c
       LEFT JOIN "Item" i ON i."categoryId" = c.id
-      GROUP BY c.id, c.name, c."imageUrl", c."createdAt"
+      GROUP BY c.id, c.name, c."imageUrl", c."subCategories", c."createdAt"
       ORDER BY c."createdAt" ASC
     `);
     res.json(rows);
   });
 
   app.post('/api/categories', authenticateToken, upload.single('image'), async (req, res) => {
-    const { name } = req.body;
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : req.body.imageUrl || null;
     try {
+      const { name } = req.body;
+      if (!name?.trim()) return res.status(400).json({ message: 'Category name is required' });
+      let imageUrl = req.body.imageUrl || null;
+      if (req.file) {
+        imageUrl = await uploadToCloudinary(req.file.buffer, 'image');
+      }
+      let subCategories: string[] = [];
+      try {
+        if (req.body.subCategories) {
+          subCategories = JSON.parse(req.body.subCategories);
+        }
+        if (!Array.isArray(subCategories)) {
+          return res.status(400).json({ message: 'subCategories must be an array' });
+        }
+      } catch (err) {
+        return res.status(400).json({ message: 'Invalid JSON for subCategories' });
+      }
+
       const { rows } = await query(
-        `INSERT INTO "Category" (id, name, "imageUrl", "createdAt")
-         VALUES ($1, $2, $3, NOW()) RETURNING *`,
-        [randomUUID(), name, imageUrl],
+        `INSERT INTO "Category" (id, name, "imageUrl", "subCategories", "createdAt")
+         VALUES ($1, $2, $3, $4::jsonb, NOW()) RETURNING *`,
+        [randomUUID(), name.trim(), imageUrl, JSON.stringify(subCategories)],
       );
       res.json(rows[0]);
     } catch (err: any) {
-      if (err.code === '23505') return res.status(400).json({ message: 'Category already exists' });
-      throw err;
+      if (err.code === '23505') return res.status(409).json({ message: `Category "${req.body?.name}" already exists` });
+      if (err.code === '42703') return res.status(500).json({ message: 'Database schema is outdated — run: npm run db:migrate' });
+      console.error('Category POST error:', err.code, err.message);
+      res.status(500).json({ message: err.message || 'Error creating category' });
     }
   });
 
   app.put('/api/categories/:id', authenticateToken, upload.single('image'), async (req, res) => {
     const { id } = req.params;
-    const { name } = req.body;
-    const newImage = req.file ? `/uploads/${req.file.filename}` : req.body.imageUrl ?? null;
+    // Build SET clause dynamically so callers can update a subset of fields
+    // without accidentally resetting fields they didn't touch (e.g. subCategories).
+    const sets: string[] = [];
+    const params: unknown[] = [];
 
-    const { rows } = newImage !== null
-      ? await query(
-          `UPDATE "Category" SET name = $1, "imageUrl" = $2 WHERE id = $3 RETURNING *`,
-          [name, newImage, id],
-        )
-      : await query(
-          `UPDATE "Category" SET name = $1 WHERE id = $2 RETURNING *`,
-          [name, id],
-        );
+    const push = (val: unknown) => { params.push(val); return `$${params.length}`; };
+
+    if (req.body.name !== undefined) sets.push(`name=${push(req.body.name)}`);
+
+    if (req.file) {
+      const newImageUrl = await uploadToCloudinary(req.file.buffer, 'image');
+      sets.push(`"imageUrl"=${push(newImageUrl)}`);
+      const { rows: existing } = await query(`SELECT "imageUrl" FROM "Category" WHERE id = $1`, [id]);
+      if (existing[0]?.imageUrl) await deleteFile(existing[0].imageUrl);
+    } else if (req.body.imageUrl !== undefined) {
+      sets.push(`"imageUrl"=${push(req.body.imageUrl || null)}`);
+    }
+
+    if (req.body.subCategories !== undefined) {
+      try {
+        const parsed = JSON.parse(req.body.subCategories);
+        if (!Array.isArray(parsed)) {
+          return res.status(400).json({ message: 'subCategories must be an array' });
+        }
+        sets.push(`"subCategories"=${push(JSON.stringify(parsed))}::jsonb`);
+      } catch (err) {
+        return res.status(400).json({ message: 'Invalid JSON for subCategories' });
+      }
+    }
+
+    if (sets.length === 0) return res.status(400).json({ message: 'Nothing to update' });
+
+    params.push(id);
+    const { rows } = await query(
+      `UPDATE "Category" SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`,
+      params,
+    );
 
     if (!rows[0]) return res.status(404).json({ message: 'Category not found' });
     res.json(rows[0]);
@@ -124,44 +200,61 @@ async function startServer() {
     if (rows[0].count > 0) {
       return res.status(400).json({ message: 'Cannot delete category with items' });
     }
-    await query(`DELETE FROM "Category" WHERE id = $1`, [id]);
+    const { rows: deletedRows } = await query(`DELETE FROM "Category" WHERE id = $1 RETURNING "imageUrl"`, [id]);
+    if (deletedRows[0]?.imageUrl) await deleteFile(deletedRows[0].imageUrl);
     res.sendStatus(204);
   });
 
   // ── Items ───────────────────────────────────────────────────────────────────
   app.get('/api/items', async (req, res) => {
     const categoryId = req.query.categoryId as string | undefined;
-    const { rows } = await query(
-      `SELECT
-        i.id, i.name, i.description, i.price, i."categoryId", i."createdAt",
+    const subCategory = req.query.subCategory as string | undefined;
+
+    let sql = `
+      SELECT
+        i.id, i.name, i.description, i.price, i."categoryId", i."subCategory", i."createdAt",
         json_build_object('id', c.id, 'name', c.name, 'imageUrl', c."imageUrl") AS category
        FROM "Item" i
        JOIN "Category" c ON c.id = i."categoryId"
        WHERE ($1::text IS NULL OR i."categoryId" = $1)
-       ORDER BY i."createdAt" ASC`,
-      [categoryId ?? null],
-    );
+    `;
+    const params: (string | null)[] = [categoryId ?? null];
+
+    if (subCategory) {
+      params.push(subCategory);
+      sql += ` AND i."subCategory" = $${params.length}`;
+    }
+
+    sql += ` ORDER BY i."createdAt" ASC`;
+
+    const { rows } = await query(sql, params);
     res.json(rows);
   });
 
   app.post('/api/items', authenticateToken, async (req, res) => {
-    const { name, description, price, categoryId } = req.body;
+    const { name, description, price, categoryId, subCategory } = req.body;
+    const parsedPrice = parseFloat(price);
+    if (isNaN(parsedPrice)) return res.status(400).json({ message: 'Invalid price' });
+    
     const { rows } = await query(
-      `INSERT INTO "Item" (id, name, description, price, "categoryId", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, NOW()) RETURNING *`,
-      [randomUUID(), name, description, parseFloat(price), categoryId],
+      `INSERT INTO "Item" (id, name, description, price, "categoryId", "subCategory", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *`,
+      [randomUUID(), name, description ?? '', parsedPrice, categoryId, subCategory ?? null],
     );
     res.json(rows[0]);
   });
 
   app.put('/api/items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { name, description, price, categoryId } = req.body;
+    const { name, description, price, categoryId, subCategory } = req.body;
+    const parsedPrice = parseFloat(price);
+    if (isNaN(parsedPrice)) return res.status(400).json({ message: 'Invalid price' });
+
     const { rows } = await query(
       `UPDATE "Item"
-       SET name = $1, description = $2, price = $3, "categoryId" = $4
-       WHERE id = $5 RETURNING *`,
-      [name, description, parseFloat(price), categoryId, id],
+       SET name=$1, description=$2, price=$3, "categoryId"=$4, "subCategory"=$5
+       WHERE id=$6 RETURNING *`,
+      [name, description ?? '', parsedPrice, categoryId, subCategory ?? null, id],
     );
     if (!rows[0]) return res.status(404).json({ message: 'Item not found' });
     res.json(rows[0]);
@@ -179,36 +272,165 @@ async function startServer() {
   });
 
   app.post('/api/media', authenticateToken, upload.single('file'), async (req, res) => {
-    const { type } = req.body;
-    const url = req.file ? `/uploads/${req.file.filename}` : req.body.url;
-    const { rows } = await query(
-      `INSERT INTO "Media" (id, type, url) VALUES ($1, $2, $3) RETURNING *`,
-      [randomUUID(), type, url],
-    );
-    res.json(rows[0]);
+    try {
+      const { type } = req.body;
+      let url = req.body.url;
+      const isHero = ['hero_image', 'hero_video'].includes(type);
+      
+      if (req.file) {
+        const resourceType = type === 'hero_video' ? 'video' : 'image';
+        url = await uploadToCloudinary(req.file.buffer, resourceType);
+      }
+
+      if (isHero) {
+        await query(`UPDATE "Media" SET "isActive" = false WHERE type IN ('hero_image', 'hero_video')`);
+      }
+
+      const { rows } = await query(
+        `INSERT INTO "Media" (id, type, url, "isActive") VALUES ($1, $2, $3, $4) RETURNING *`,
+        [randomUUID(), type, url, isHero],
+      );
+      res.json(rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Error uploading media' });
+    }
   });
 
   app.put('/api/media/:id', authenticateToken, upload.single('file'), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { type } = req.body;
+      let newUrl = req.body.url ?? null;
+
+      const isHero = ['hero_image', 'hero_video'].includes(type);
+      if (isHero) {
+        await query(`UPDATE "Media" SET "isActive" = false WHERE type IN ('hero_image', 'hero_video')`);
+      }
+
+      if (req.file) {
+        const resourceType = type === 'hero_video' ? 'video' : 'image';
+        newUrl = await uploadToCloudinary(req.file.buffer, resourceType);
+        
+        const { rows: existing } = await query(`SELECT url, type FROM "Media" WHERE id = $1`, [id]);
+        if (existing[0]?.url) {
+          const oldIsVideo = existing[0].type === 'hero_video';
+          await deleteFile(existing[0].url, oldIsVideo ? 'video' : 'image');
+        }
+      }
+
+      const { rows } = newUrl !== null
+        ? await query(
+            `UPDATE "Media" SET type = $1, url = $2, "isActive" = $4 WHERE id = $3 RETURNING *`,
+            [type, newUrl, id, isHero],
+          )
+        : await query(
+            `UPDATE "Media" SET type = $1, "isActive" = $3 WHERE id = $2 RETURNING *`,
+            [type, id, isHero],
+          );
+
+      if (!rows[0]) return res.status(404).json({ message: 'Media not found' });
+      res.json(rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Error updating media' });
+    }
+  });
+
+  app.patch('/api/media/:id/activate', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { type } = req.body;
-    const newUrl = req.file ? `/uploads/${req.file.filename}` : req.body.url ?? null;
-
-    const { rows } = newUrl !== null
-      ? await query(
-          `UPDATE "Media" SET type = $1, url = $2 WHERE id = $3 RETURNING *`,
-          [type, newUrl, id],
-        )
-      : await query(
-          `UPDATE "Media" SET type = $1 WHERE id = $2 RETURNING *`,
-          [type, id],
-        );
-
+    await query(`UPDATE "Media" SET "isActive" = false WHERE type IN ('hero_image', 'hero_video')`);
+    const { rows } = await query(`UPDATE "Media" SET "isActive" = true WHERE id = $1 RETURNING *`, [id]);
     if (!rows[0]) return res.status(404).json({ message: 'Media not found' });
     res.json(rows[0]);
   });
 
   app.delete('/api/media/:id', authenticateToken, async (req, res) => {
-    await query(`DELETE FROM "Media" WHERE id = $1`, [req.params.id]);
+    const { rows: deletedRows } = await query(`DELETE FROM "Media" WHERE id = $1 RETURNING *`, [req.params.id]);
+    
+    // Auto-activate remaining hero media if the deleted one was active
+    if (deletedRows[0] && deletedRows[0].isActive && ['hero_image', 'hero_video'].includes(deletedRows[0].type)) {
+       await query(`UPDATE "Media" SET "isActive" = true WHERE id = (SELECT id FROM "Media" WHERE type IN ('hero_image', 'hero_video') LIMIT 1)`);
+    }
+
+    if (deletedRows[0]?.url) {
+      const isVideo = deletedRows[0].type === 'hero_video';
+      await deleteFile(deletedRows[0].url, isVideo ? 'video' : 'image');
+    }
+
+    res.sendStatus(204);
+  });
+
+  // ── Ticker ──────────────────────────────────────────────────────────────────
+  app.get('/api/ticker', async (_req, res) => {
+    const { rows } = await query(
+      `SELECT * FROM "Ticker" ORDER BY "sortOrder" ASC, "createdAt" ASC`,
+    );
+    res.json(rows);
+  });
+
+  app.post('/api/ticker', authenticateToken, async (req, res) => {
+    const { text } = req.body;
+    const { rows: countRows } = await query(`SELECT COUNT(*)::int AS count FROM "Ticker"`);
+    const sortOrder = countRows[0].count;
+    const { rows } = await query(
+      `INSERT INTO "Ticker" (id, text, "sortOrder", "createdAt") VALUES ($1, $2, $3, NOW()) RETURNING *`,
+      [randomUUID(), text, sortOrder],
+    );
+    res.json(rows[0]);
+  });
+
+  app.put('/api/ticker/:id', authenticateToken, async (req, res) => {
+    const { id } = req.params;
+    const { text } = req.body;
+    const { rows } = await query(
+      `UPDATE "Ticker" SET text=$1 WHERE id=$2 RETURNING *`,
+      [text, id],
+    );
+    if (!rows[0]) return res.status(404).json({ message: 'Ticker item not found' });
+    res.json(rows[0]);
+  });
+
+  app.delete('/api/ticker/:id', authenticateToken, async (req, res) => {
+    await query(`DELETE FROM "Ticker" WHERE id=$1`, [req.params.id]);
+    res.sendStatus(204);
+  });
+
+  // ── Specials ─────────────────────────────────────────────────────────────────
+  app.get('/api/specials', async (_req, res) => {
+    const { rows } = await query(
+      `SELECT * FROM "Special" ORDER BY "createdAt" ASC`,
+    );
+    res.json(rows);
+  });
+
+  app.post('/api/specials', authenticateToken, upload.single('image'), async (req, res) => {
+    const { rows: countRows } = await query(`SELECT COUNT(*)::int AS count FROM "Special"`);
+    if (countRows[0].count >= 3) {
+      return res.status(400).json({ message: 'Maximum of 3 specials allowed. Delete one first.' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ message: 'Image file is required' });
+    }
+
+    try {
+      const imageUrl = await uploadToCloudinary(req.file.buffer, 'image');
+      
+      const { rows } = await query(
+        `INSERT INTO "Special" (id, "imageUrl", "createdAt") VALUES ($1, $2, NOW()) RETURNING *`,
+        [randomUUID(), imageUrl],
+      );
+      res.json(rows[0]);
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ message: 'Error uploading special' });
+    }
+  });
+
+  app.delete('/api/specials/:id', authenticateToken, async (req, res) => {
+    const { rows } = await query(`DELETE FROM "Special" WHERE id=$1 RETURNING "imageUrl"`, [req.params.id]);
+    if (rows[0]?.imageUrl) await deleteFile(rows[0].imageUrl);
     res.sendStatus(204);
   });
 
@@ -245,14 +467,14 @@ async function startServer() {
     const vite = await createViteServer({
       configFile: join(FRONTEND_DIR, 'vite.config.ts'),
       root: FRONTEND_DIR,
-      server: { middlewareMode: true },
+      server: { middlewareMode: true, hmr: { clientPort: PORT } },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
     const distPath = join(FRONTEND_DIR, 'dist');
     app.use(express.static(distPath));
-    app.get('*', (req, res) => {
+    app.get('*', (_req, res) => {
       res.sendFile(join(distPath, 'index.html'));
     });
   }
