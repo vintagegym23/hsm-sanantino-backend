@@ -105,7 +105,7 @@ async function startServer() {
       if (error.code === '42P01') {
         return res.status(500).json({ message: 'Database schema is not initialized. Please run: npm run db:schema && npm run db:seed' });
       }
-      res.status(500).json({ message: 'Internal server error during login' });
+      res.status(500).json({ message: 'Internal server error during login', details: error.message || String(error) });
     }
   });
 
