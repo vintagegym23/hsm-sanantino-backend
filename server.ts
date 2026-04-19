@@ -90,14 +90,22 @@ async function startServer() {
 
   // ── Auth ────────────────────────────────────────────────────────────────────
   app.post('/api/auth/login', async (req, res) => {
-    const { email, password } = req.body;
-    const { rows } = await query('SELECT * FROM "Admin" WHERE email = $1', [email]);
-    const admin = rows[0];
-    if (admin && (await bcrypt.compare(password, admin.password))) {
-      const token = jwt.sign({ id: admin.id, email: admin.email }, JWT_SECRET, { expiresIn: '24h' });
-      res.json({ token });
-    } else {
-      res.status(401).json({ message: 'Invalid credentials' });
+    try {
+      const { email, password } = req.body;
+      const { rows } = await query('SELECT * FROM "Admin" WHERE email = $1', [email]);
+      const admin = rows[0];
+      if (admin && (await bcrypt.compare(password, admin.password))) {
+        const token = jwt.sign({ id: admin.id, email: admin.email }, JWT_SECRET, { expiresIn: '24h' });
+        res.json({ token });
+      } else {
+        res.status(401).json({ message: 'Invalid credentials' });
+      }
+    } catch (error: any) {
+      console.error('Login error:', error);
+      if (error.code === '42P01') {
+        return res.status(500).json({ message: 'Database schema is not initialized. Please run: npm run db:schema && npm run db:seed' });
+      }
+      res.status(500).json({ message: 'Internal server error during login' });
     }
   });
 
