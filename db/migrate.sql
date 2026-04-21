@@ -30,3 +30,7 @@ CREATE TABLE IF NOT EXISTS "Special" (
   "imageUrl"  TEXT NOT NULL,
   "createdAt" TIMESTAMP NOT NULL DEFAULT NOW()
 );
+
+-- HSM Signature attribute (additive, zero downtime)
+ALTER TABLE "Item"
+  ADD COLUMN IF NOT EXISTS "isHsmSignature" BOOLEAN NOT NULL DEFAULT false;

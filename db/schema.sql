@@ -17,13 +17,14 @@ CREATE TABLE IF NOT EXISTS "Category" (
 );
 
 CREATE TABLE IF NOT EXISTS "Item" (
-  id             TEXT PRIMARY KEY,
-  name           TEXT NOT NULL,
-  description    TEXT NOT NULL DEFAULT '',
-  price          DOUBLE PRECISION NOT NULL,
-  "categoryId"   TEXT NOT NULL REFERENCES "Category"(id),
-  "subCategory"  TEXT,
-  "createdAt"    TIMESTAMP NOT NULL DEFAULT NOW()
+  id                TEXT PRIMARY KEY,
+  name              TEXT NOT NULL,
+  description       TEXT NOT NULL DEFAULT '',
+  price             DOUBLE PRECISION NOT NULL,
+  "categoryId"      TEXT NOT NULL REFERENCES "Category"(id),
+  "subCategory"     TEXT,
+  "isHsmSignature"  BOOLEAN NOT NULL DEFAULT false,
+  "createdAt"       TIMESTAMP NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS "Media" (

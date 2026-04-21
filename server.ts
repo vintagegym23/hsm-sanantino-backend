@@ -222,7 +222,8 @@ async function startServer() {
 
     let sql = `
       SELECT
-        i.id, i.name, i.description, i.price, i."categoryId", i."subCategory", i."createdAt",
+        i.id, i.name, i.description, i.price, i."categoryId", i."subCategory",
+        i."isHsmSignature", i."createdAt",
         json_build_object('id', c.id, 'name', c.name, 'imageUrl', c."imageUrl") AS category
        FROM "Item" i
        JOIN "Category" c ON c.id = i."categoryId"
@@ -242,29 +243,29 @@ async function startServer() {
   });
 
   app.post('/api/items', authenticateToken, async (req, res) => {
-    const { name, description, price, categoryId, subCategory } = req.body;
+    const { name, description, price, categoryId, subCategory, isHsmSignature } = req.body;
     const parsedPrice = parseFloat(price);
     if (isNaN(parsedPrice)) return res.status(400).json({ message: 'Invalid price' });
-    
+
     const { rows } = await query(
-      `INSERT INTO "Item" (id, name, description, price, "categoryId", "subCategory", "createdAt")
-       VALUES ($1, $2, $3, $4, $5, $6, NOW()) RETURNING *`,
-      [randomUUID(), name, description ?? '', parsedPrice, categoryId, subCategory ?? null],
+      `INSERT INTO "Item" (id, name, description, price, "categoryId", "subCategory", "isHsmSignature", "createdAt")
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW()) RETURNING *`,
+      [randomUUID(), name, description ?? '', parsedPrice, categoryId, subCategory ?? null, isHsmSignature === true || isHsmSignature === 'true'],
     );
     res.json(rows[0]);
   });
 
   app.put('/api/items/:id', authenticateToken, async (req, res) => {
     const { id } = req.params;
-    const { name, description, price, categoryId, subCategory } = req.body;
+    const { name, description, price, categoryId, subCategory, isHsmSignature } = req.body;
     const parsedPrice = parseFloat(price);
     if (isNaN(parsedPrice)) return res.status(400).json({ message: 'Invalid price' });
 
     const { rows } = await query(
       `UPDATE "Item"
-       SET name=$1, description=$2, price=$3, "categoryId"=$4, "subCategory"=$5
-       WHERE id=$6 RETURNING *`,
-      [name, description ?? '', parsedPrice, categoryId, subCategory ?? null, id],
+       SET name=$1, description=$2, price=$3, "categoryId"=$4, "subCategory"=$5, "isHsmSignature"=$6
+       WHERE id=$7 RETURNING *`,
+      [name, description ?? '', parsedPrice, categoryId, subCategory ?? null, isHsmSignature === true || isHsmSignature === 'true', id],
     );
     if (!rows[0]) return res.status(404).json({ message: 'Item not found' });
     res.json(rows[0]);
