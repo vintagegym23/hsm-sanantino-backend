@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS "Category" (
   name            TEXT NOT NULL UNIQUE,
   "imageUrl"      TEXT,
   "subCategories" JSONB NOT NULL DEFAULT '[]'::jsonb,
+  "sortOrder"     INTEGER NOT NULL DEFAULT 0,
   "createdAt"     TIMESTAMP NOT NULL DEFAULT NOW()
 );
 

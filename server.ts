@@ -19,7 +19,7 @@ import jwt from 'jsonwebtoken';
 import bcrypt from 'bcryptjs';
 import multer from 'multer';
 import fs from 'fs';
-import { query } from './db.js';
+import { query, pool } from './db.js';
 import { v2 as cloudinary } from 'cloudinary';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'super-secret-key';
@@ -113,14 +113,38 @@ async function startServer() {
   app.get('/api/categories', async (req, res) => {
     const { rows } = await query(`
       SELECT
-        c.id, c.name, c."imageUrl", c."subCategories", c."createdAt",
+        c.id, c.name, c."imageUrl", c."subCategories", c."sortOrder", c."createdAt",
         json_build_object('items', COUNT(i.id)::int) AS "_count"
       FROM "Category" c
       LEFT JOIN "Item" i ON i."categoryId" = c.id
-      GROUP BY c.id, c.name, c."imageUrl", c."subCategories", c."createdAt"
-      ORDER BY c."createdAt" ASC
+      GROUP BY c.id, c.name, c."imageUrl", c."subCategories", c."sortOrder", c."createdAt"
+      ORDER BY c."sortOrder" ASC, c."createdAt" ASC
     `);
     res.json(rows);
+  });
+
+  app.patch('/api/categories/reorder', authenticateToken, async (req, res) => {
+    const { order } = req.body;
+    if (!Array.isArray(order) || order.length === 0) {
+      return res.status(400).json({ message: 'order must be a non-empty array' });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const { id, sortOrder } of order) {
+        await client.query(
+          `UPDATE "Category" SET "sortOrder" = $1 WHERE id = $2`,
+          [sortOrder, id],
+        );
+      }
+      await client.query('COMMIT');
+      res.sendStatus(204);
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
   });
 
   app.post('/api/categories', authenticateToken, upload.single('image'), async (req, res) => {
@@ -143,10 +167,15 @@ async function startServer() {
         return res.status(400).json({ message: 'Invalid JSON for subCategories' });
       }
 
+      const { rows: maxRows } = await query(
+        `SELECT COALESCE(MAX("sortOrder"), -1) + 1 AS next FROM "Category"`,
+      );
+      const nextSortOrder = maxRows[0].next;
+
       const { rows } = await query(
-        `INSERT INTO "Category" (id, name, "imageUrl", "subCategories", "createdAt")
-         VALUES ($1, $2, $3, $4::jsonb, NOW()) RETURNING *`,
-        [randomUUID(), name.trim(), imageUrl, JSON.stringify(subCategories)],
+        `INSERT INTO "Category" (id, name, "imageUrl", "subCategories", "sortOrder", "createdAt")
+         VALUES ($1, $2, $3, $4::jsonb, $5, NOW()) RETURNING *`,
+        [randomUUID(), name.trim(), imageUrl, JSON.stringify(subCategories), nextSortOrder],
       );
       res.json(rows[0]);
     } catch (err: any) {

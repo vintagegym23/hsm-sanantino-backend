@@ -34,3 +34,18 @@ CREATE TABLE IF NOT EXISTS "Special" (
 -- HSM Signature attribute (additive, zero downtime)
 ALTER TABLE "Item"
   ADD COLUMN IF NOT EXISTS "isHsmSignature" BOOLEAN NOT NULL DEFAULT false;
+
+-- Category sort order (additive, zero downtime — DEFAULT 0 requires no table rewrite)
+ALTER TABLE "Category"
+  ADD COLUMN IF NOT EXISTS "sortOrder" INTEGER NOT NULL DEFAULT 0;
+
+-- Back-fill existing categories with sequential order based on their creation date.
+-- This UPDATE runs as a single atomic statement so there is no partial state.
+UPDATE "Category" c
+SET "sortOrder" = sub.rn
+FROM (
+  SELECT id,
+         (ROW_NUMBER() OVER (ORDER BY "createdAt" ASC) - 1)::integer AS rn
+  FROM "Category"
+) sub
+WHERE c.id = sub.id;
