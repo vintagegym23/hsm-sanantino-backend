@@ -41,6 +41,8 @@ const uploadToCloudinary = (buffer: Buffer, resourceType: 'image' | 'video' = 'i
   });
 };
 
+const isVideoMediaType = (type: string) => type === 'hero_video' || type === 'catering_video';
+
 const extractPublicId = (url: string) => {
   const uploadIndex = url.indexOf('/upload/');
   if (uploadIndex === -1) return null;
@@ -318,7 +320,7 @@ async function startServer() {
       const isHero = ['hero_image', 'hero_video'].includes(type);
       
       if (req.file) {
-        const resourceType = type === 'hero_video' ? 'video' : 'image';
+        const resourceType = isVideoMediaType(type) ? 'video' : 'image';
         url = await uploadToCloudinary(req.file.buffer, resourceType);
       }
 
@@ -349,12 +351,12 @@ async function startServer() {
       }
 
       if (req.file) {
-        const resourceType = type === 'hero_video' ? 'video' : 'image';
+        const resourceType = isVideoMediaType(type) ? 'video' : 'image';
         newUrl = await uploadToCloudinary(req.file.buffer, resourceType);
-        
+
         const { rows: existing } = await query(`SELECT url, type FROM "Media" WHERE id = $1`, [id]);
         if (existing[0]?.url) {
-          const oldIsVideo = existing[0].type === 'hero_video';
+          const oldIsVideo = isVideoMediaType(existing[0].type);
           await deleteFile(existing[0].url, oldIsVideo ? 'video' : 'image');
         }
       }
@@ -394,7 +396,7 @@ async function startServer() {
     }
 
     if (deletedRows[0]?.url) {
-      const isVideo = deletedRows[0].type === 'hero_video';
+      const isVideo = isVideoMediaType(deletedRows[0].type);
       await deleteFile(deletedRows[0].url, isVideo ? 'video' : 'image');
     }
 
